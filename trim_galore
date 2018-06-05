@@ -234,7 +234,6 @@ sub trim{
   if ($threads){
       warn "Running cutadapt with $threads threads\n";
       print REPORT "Running cutadapt with $threads threads\n";
-      $threads=" -j " . $threads . " ";
   }
 
   if ($validate){ # only for paired-end files
@@ -1321,6 +1320,7 @@ sub process_commandline{
   my $max_length;
   my $maxn;
   my $trimn;
+  my $threads;
 
   my $command_line = GetOptions ('help|man' => \$help,
 				 'q|quality=i' => \$quality,
@@ -1359,6 +1359,7 @@ sub process_commandline{
 				 'max_length=i' => \$max_length,
 				 'max_n=i'      => \$maxn,
 				 'trim-n'      => \$trimn,
+         'threads=i'   => \$threads,
       );
 
   ### EXIT ON ERROR if there were errors with any of the supplied options
@@ -1383,7 +1384,7 @@ sub process_commandline{
                                (powered by Cutadapt)
                                   version $trimmer_version
 
-                             Last update: 19 03 2018
+                             Last update: 05 06 2018
 
 VERSION
     exit;
@@ -1601,7 +1602,13 @@ VERSION
       }
   }
 
-  my $trim_n;
+  if ($threads){
+      $threads = " -j " . $threads . " ";
+  }
+  else{
+      $threads = '';
+  }
+
   if ($trimn){
       $trim_n = '--trim-n';
   }
@@ -1624,7 +1631,7 @@ VERSION
       $rrbs = 0;
   }
 
-  return ($quality,$adapter,$stringency,$rrbs,$length_cutoff,$keep,$fastqc,$non_directional,$phred_encoding,$fastqc_args,$trim,$gzip,$validate,$retain,$length_read_1,$length_read_2,$adapter2,$error_rate,$output_dir,$no_report_file,$dont_gzip,$clip_r1,$clip_r2,$three_prime_clip_r1,$three_prime_clip_r2,$nextera,$small_rna,$path_to_cutadapt,$illumina,$max_length,$maxn,$trim_n);
+  return ($quality,$adapter,$stringency,$rrbs,$length_cutoff,$keep,$fastqc,$non_directional,$phred_encoding,$fastqc_args,$trim,$gzip,$validate,$retain,$length_read_1,$length_read_2,$adapter2,$error_rate,$output_dir,$no_report_file,$dont_gzip,$clip_r1,$clip_r2,$three_prime_clip_r1,$three_prime_clip_r2,$nextera,$small_rna,$path_to_cutadapt,$illumina,$max_length,$maxn,$trim_n,$threads);
 }
 
 sub Ncounter{
