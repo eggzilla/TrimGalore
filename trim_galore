@@ -25,14 +25,14 @@ use Cwd;
 
 ## This script is taking in FastQ sequences and trims them using Cutadapt
 
-## last modified on 22 May 2018
+## last modified on 5 June 2018
 
 my $DOWARN = 1; # print on screen warning and text by default
 BEGIN { $SIG{'__WARN__'} = sub { warn $_[0] if $DOWARN } };
 
 my $trimmer_version = '0.4.5_dev';
 
-my ($cutoff,$adapter,$stringency,$rrbs,$length_cutoff,$keep,$fastqc,$non_directional,$phred_encoding,$fastqc_args,$trim,$gzip,$validate,$retain,$length_read_1,$length_read_2,$a2,$error_rate,$output_dir,$no_report_file,$dont_gzip,$clip_r1,$clip_r2,$three_prime_clip_r1,$three_prime_clip_r2,$nextera,$small_rna,$path_to_cutadapt,$illumina,$max_length,$maxn,$trim_n) = process_commandline();
+my ($cutoff,$adapter,$stringency,$rrbs,$length_cutoff,$keep,$fastqc,$non_directional,$phred_encoding,$fastqc_args,$trim,$gzip,$validate,$retain,$length_read_1,$length_read_2,$a2,$error_rate,$output_dir,$no_report_file,$dont_gzip,$clip_r1,$clip_r2,$three_prime_clip_r1,$three_prime_clip_r2,$nextera,$small_rna,$path_to_cutadapt,$illumina,$max_length,$maxn,$trim_n,$threads) = process_commandline();
 
 my @filenames = @ARGV;
 die "\nPlease provide the filename(s) of one or more FastQ file(s) to launch Trim Galore!\n
@@ -104,7 +104,7 @@ if ($adapter eq 'TGGAATTCTCGG'){
 	$length_cutoff = 18;
 	warn "Reducing length cutoff to 18bp for small RNA-Seq reads because a cutoff of 20bp may remove some short species of small RNAs if they had been trimmed by 1,2 or 3bp\n";
     }
-    
+
     ### If the file is a smallRNA library and paired-end we set the Illumina 5' adapter as the $a2 sequence
     if ($validate){
 	unless (defined $a2){
@@ -117,7 +117,7 @@ if ($adapter eq 'TGGAATTCTCGG'){
 unless (defined $length_cutoff){
     $length_cutoff = 20; # non small RNA length cutoff
 }
-	
+
 
 unless (defined $a2){ # optional adapter for the second read in a pair. Only works for --paired trimming
   $a2 = '';
@@ -231,6 +231,11 @@ sub trim{
       print REPORT "Removing Ns from the start and end of reads\n";
   }
 
+  if ($threads){
+      warn "Running cutadapt with $threads threads\n";
+      print REPORT "Running cutadapt with $threads threads\n";
+      $threads=" -j " . $threads . " ";
+  }
 
   if ($validate){ # only for paired-end files
 
@@ -321,47 +326,47 @@ sub trim{
 
   ### Proceeding differently for RRBS and other type of libraries
   if ($rrbs){
-      
+
       ### Skipping quality filtering for RRBS libraries if a quality cutoff of 0 was specified
       if ($cutoff == 0){
 	  warn "Quality cutoff selected was 0    -    Skipping quality trimming altogether\n\n";
 	  # sleep (3);
       }
       else{
-	  
+
 	  $temp = $filename;
 	  $temp =~ s/^.*\///; # replacing optional file path information
 	  $temp =~ s/$/_qual_trimmed.fastq/;
 	  open (TEMP,'>',$output_dir.$temp) or die "Can't write to '$temp': $!";
-	  
+
 	  warn "  >>> Now performing adaptive quality trimming with a Phred-score cutoff of: $cutoff <<<\n\n";
 	  # sleep (1);
-	  
-	  open (QUAL,"$path_to_cutadapt -f fastq -e $error_rate -q $cutoff -a X $filename |") or die "Can't open pipe to Cutadapt: $!";
+
+	  open (QUAL,"$path_to_cutadapt $threads -f fastq -e $error_rate -q $cutoff -a X $filename |") or die "Can't open pipe to Cutadapt: $!";
 
 	  my $qual_count = 0;
-	  
+
 	  while (1){
 	      my $l1 = <QUAL>;
 	      my $seq = <QUAL>;
 	      my $l3 = <QUAL>;
 	      my $qual = <QUAL>;
 	      last unless (defined $qual);
-	
+
 	      $qual_count++;
 	      if ($qual_count%10000000 == 0){
 		  warn "$qual_count sequences processed\n";
 	      }
 	      print TEMP "$l1$seq$l3$qual";
 	  }
-	  
+
 	  warn "\n  >>> Quality trimming completed <<<\n$qual_count sequences processed in total\n\n";
 	  close QUAL or die "Unable to close QUAL filehandle: $!\n";
-	  
+
       }
   }
-  
-  
+
+
   if ($output_filename =~ /\.fastq$/){
       $output_filename =~ s/\.fastq$/_trimmed.fq/;
   }
@@ -377,7 +382,7 @@ sub trim{
   else{
       $output_filename =~ s/$/_trimmed.fq/;
   }
-  
+
   if ($gzip or $filename =~ /\.gz$/){
       if ($dont_gzip){
 	  open (OUT,'>',$output_dir.$output_filename) or die "Can't open '$output_filename': $!\n"; # don't need to gzip intermediate file
@@ -395,7 +400,7 @@ sub trim{
       open (OUT,'>',$output_dir.$output_filename) or die "Can't open '$output_filename': $!\n";
   }
   warn "Writing final adapter and quality trimmed output to $output_filename\n\n";
-  
+
   my $count = 0;
   my $too_short = 0;
   my $too_long = 0;
@@ -405,56 +410,56 @@ sub trim{
   my $rrbs_trimmed_start = 0;
   my $CAA = 0;
   my $CGA = 0;
-  
+
   my $pid;
-  
+
   if ($rrbs and $cutoff != 0){
-      
+
       ### optionally using 2 different adapters for read 1 and read 2
       if ($validate and $a2){
 	  ### Figure out whether current file counts as read 1 or read 2 of paired-end files
 	  if ( scalar(@filenames)%2 == 0){ # this is read 1 of a pair
 	      warn "\n  >>> Now performing adapter trimming for the adapter sequence: '$adapter' from file $temp <<< \n";
 	      #sleep (1);
-	      $pid = open3 (\*WRITER, \*TRIM, \*ERROR,"$path_to_cutadapt -f fastq -e $error_rate -O $stringency -a $adapter $output_dir$temp") or die "Failed to launch Cutadapt: $!\n";
+	      $pid = open3 (\*WRITER, \*TRIM, \*ERROR,"$path_to_cutadapt $threads -f fastq -e $error_rate -O $stringency -a $adapter $output_dir$temp") or die "Failed to launch Cutadapt: $!\n";
 	  }
 	  else{                            # this is read 2 of a pair
 	      warn "\n  >>> Now performing adapter trimming for the adapter sequence: '$a2' from file $temp <<< \n";
 	      #sleep (1);
-	      $pid = open3 (\*WRITER, \*TRIM, \*ERROR,"$path_to_cutadapt -f fastq -e $error_rate -O $stringency -a $a2 $output_dir$temp") or die "Failed to launch Cutadapt: $!\n";
+	      $pid = open3 (\*WRITER, \*TRIM, \*ERROR,"$path_to_cutadapt $threads -f fastq -e $error_rate -O $stringency -a $a2 $output_dir$temp") or die "Failed to launch Cutadapt: $!\n";
 	  }
       }
       ### Using the same adapter for both read 1 and read 2
       else{
 	  warn "\n  >>> Now performing adapter trimming for the adapter sequence: '$adapter' from file $temp <<< \n";
 	  # sleep (3);
-	  $pid = open3 (\*WRITER, \*TRIM, \*ERROR,"$path_to_cutadapt -f fastq -e $error_rate -O $stringency -a $adapter $output_dir$temp") or die "Failed to launch Cutadapt: $!\n";
+	  $pid = open3 (\*WRITER, \*TRIM, \*ERROR,"$path_to_cutadapt $threads -f fastq -e $error_rate -O $stringency -a $adapter $output_dir$temp") or die "Failed to launch Cutadapt: $!\n";
       }
-      
+
       close WRITER or die $!; # not needed
-      
+
       open (QUAL,"$output_dir$temp") or die $!; # quality trimmed file
-      
+
       if ($filename =~ /\.gz$/){
 	  open (IN,"gunzip -c $filename |") or die $!; # original, untrimmed file
       }
       else{
 	  open (IN,$filename) or die $!; # original, untrimmed file
       }
-      
+
       while (1){
-	  
+
 	  # we can process the output from Cutadapt and the original input 1 by 1 to decide if the adapter has been removed or not
 	  my $l1 = <TRIM>;
 	  my $seq = <TRIM>; # adapter trimmed sequence
 	  my $l3 = <TRIM>;
 	  my $qual = <TRIM>;
-	  
+
 	  $_ = <IN>;   # irrelevant
 	  my $original_seq = <IN>;
 	  $_ = <IN>;   # irrelevant
 	  $_ = <IN>;   # irrelevant
-	  
+
 	  $_ = <QUAL>; # irrelevant
 	  my $qual_trimmed_seq = <QUAL>;
 	  $_ = <QUAL>; # irrelevant
@@ -466,20 +471,20 @@ sub trim{
 	  if ($count%10000000 == 0){
 	      warn "$count sequences processed\n";
 	  }
-	  
+
 	  chomp $seq;
 	  chomp $qual;
 	  chomp $qual_trimmed_seq;
 	  chomp $original_seq;
-	  
+
 	  my $quality_trimmed_seq_length = length $qual_trimmed_seq;
-	  
+
 	  if (length $original_seq > length $qual_trimmed_seq){
 	      ++$quality_trimmed;
 	  }
-	  
+
 	  my $nd = 0;
-	  
+
 	  ### NON-DIRECTIONAL RRBS
 	  if ($non_directional){
 	      if (length$seq > 2){
@@ -499,7 +504,7 @@ sub trim{
 		  }
 	      }
 	  }
-	  
+
 	  ### directional read
 	  unless ($nd == 1){
 	      # only trimming Read 1 of a pair for a further 2bp from their 3' end
@@ -516,11 +521,11 @@ sub trim{
 		  }
 	      }
 	      else{ # single-end reads will be trimmed from their 3' end
-		  if (length $seq >= 2 and length$seq < $quality_trimmed_seq_length){                                                                                                                   
-		      $seq = substr ($seq,0,length($seq)-2);                                                                                                                                            
-		      $qual = substr ($qual,0,length($qual)-2);                                                                                                                                         
-		      ++$rrbs_trimmed;                                                                                                                                                                  
-		  }                                  
+		  if (length $seq >= 2 and length$seq < $quality_trimmed_seq_length){
+		      $seq = substr ($seq,0,length($seq)-2);
+		      $qual = substr ($qual,0,length($qual)-2);
+		      ++$rrbs_trimmed;
+		  }
 	      }
 	  }
 
@@ -529,20 +534,20 @@ sub trim{
 	      $seq = substr($seq,0,length($seq)-1);
 	      $qual = substr($qual,0,length($qual)-1);
 	  }
-	  
+
 	  ### PRINTING (POTENTIALLY TRIMMED) SEQUENCE
 	  if ($validate){ # printing the sequence without performing a length check (this is performed for the read pair separately later)
 	      print OUT "$l1$seq\n$l3$qual\n";
 	  }
 	  else{ # single end
-	      
+
 	      if ($clip_r1){
 		  if (length $seq > $clip_r1){  # sequences that are already too short won't be clipped again
 		      $seq = substr($seq,$clip_r1); # starting after the sequences to be trimmed until the end of the sequence
 		      $qual = substr($qual,$clip_r1);
 		  }
 	      }
-	      
+
 	      if ($three_prime_clip_r1){
 		  if (length $seq > $three_prime_clip_r1){  # sequences that are already too short won't be clipped again
 		      # warn "seq/qual before/after trimming:\n$seq\n$qual\n";
@@ -551,7 +556,7 @@ sub trim{
 		      # warn "$seq\n$qual\n";
 		  }
 	      }
-	      
+
 	      if (length $seq < $length_cutoff){
 		  ++$too_short;
 		  next;
@@ -565,18 +570,18 @@ sub trim{
 	      }
 	  }
       }
-      
+
       print REPORT "\n";
       while (<ERROR>){
 	  warn $_;
 	  print REPORT $_;
       }
-      
+
       close IN or die "Unable to close IN filehandle: $!";
       close QUAL or die "Unable to close QUAL filehandle: $!";
       close TRIM or die "Unable to close TRIM filehandle: $!";
       close OUT or die  "Unable to close OUT filehandle: $!";
-      
+
   }
   else{ # non-RRBS mode. default
 
@@ -586,37 +591,37 @@ sub trim{
 	  if ( scalar(@filenames)%2 == 0){ # this is read 1 of a pair
 	      warn "\n  >>> Now performing quality (cutoff $cutoff) and adapter trimming in a single pass for the adapter sequence: '$adapter' from file $filename <<< \n";
 	      #sleep (1);
-	      $pid = open3 (\*WRITER, \*TRIM, \*ERROR, "$path_to_cutadapt -f fastq -e $error_rate -q $cutoff -O $stringency $trim_n -a $adapter $filename") or die "Failed to launch Cutadapt: $!";
+	      $pid = open3 (\*WRITER, \*TRIM, \*ERROR, "$path_to_cutadapt $threads -f fastq -e $error_rate -q $cutoff -O $stringency $trim_n -a $adapter $filename") or die "Failed to launch Cutadapt: $!";
 	  }
 	  else{                            # this is read 2 of a pair
 	      warn "\n  >>> Now performing quality (cutoff $cutoff) and adapter trimming in a single pass for the adapter sequence: '$a2' from file $filename <<< \n";
 	      #sleep (1);
-	      $pid = open3 (\*WRITER, \*TRIM, \*ERROR, "$path_to_cutadapt -f fastq -e $error_rate -q $cutoff -O $stringency $trim_n -a $a2 $filename") or die "Failed to launch Cutadapt: $!";
+	      $pid = open3 (\*WRITER, \*TRIM, \*ERROR, "$path_to_cutadapt $threads -f fastq -e $error_rate -q $cutoff -O $stringency $trim_n -a $a2 $filename") or die "Failed to launch Cutadapt: $!";
 	  }
       }
       ### Using the same adapter for both read 1 and read 2
       else{
 	  warn "\n  >>> Now performing quality (cutoff $cutoff) and adapter trimming in a single pass for the adapter sequence: '$adapter' from file $filename <<< \n";
 	  #sleep (1);
-	  $pid = open3 (\*WRITER, \*TRIM, \*ERROR, "$path_to_cutadapt -f fastq -e $error_rate -q $cutoff -O $stringency $trim_n -a $adapter $filename") or die "Failed to launch Cutadapt: $!";
+	  $pid = open3 (\*WRITER, \*TRIM, \*ERROR, "$path_to_cutadapt $threads -f fastq -e $error_rate -q $cutoff -O $stringency $trim_n -a $adapter $filename") or die "Failed to launch Cutadapt: $!";
       }
-      
+
       close WRITER or die $!; # not needed
-    
+
       while (1){
-	  
+
 	  my $l1 = <TRIM>;
 	  my $seq = <TRIM>; # quality and/or adapter trimmed sequence
 	  my $l3 = <TRIM>;
 	  my $qual = <TRIM>;
 	  # print "$l1$seq\n$l3$qual\n";
 	  last unless (defined $qual); # could be an empty string
-	  
+
 	  $count++;
 	  if ($count%10000000 == 0){
 	      warn "$count sequences processed\n";
 	  }
-	  
+
 	  chomp $seq;
 	  chomp $qual;
 
@@ -625,20 +630,20 @@ sub trim{
 	      $seq = substr($seq,0,length($seq)-1);
 	      $qual = substr($qual,0,length($qual)-1);
 	  }
-	  
+
 	  ### PRINTING (POTENTIALLY TRIMMED) SEQUENCE
 	  if ($validate){ # printing the sequence without performing a length check (this is performed for the read pair separately later)
 	      print OUT "$l1$seq\n$l3$qual\n";
 	  }
 	  else{ # single end
-	      
+
 	      if ($clip_r1){
 		  if (length $seq > $clip_r1){ # sequences that are already too short won't be clipped again
 		      $seq = substr($seq,$clip_r1); # starting after the sequences to be trimmed until the end of the sequence
 		      $qual = substr($qual,$clip_r1);
 		  }
 	      }
-	      
+
 	      if ($three_prime_clip_r1){
 		  if (length $seq > $three_prime_clip_r1){  # sequences that are already too short won't be clipped again
 		      # warn "seq/qual before/after trimming:\n$seq\n$qual\n";
@@ -655,8 +660,8 @@ sub trim{
 		      ++$too_many_n;
 		      next;
 		  }
-	      }	
-	      
+	      }
+
 	      if (length $seq < $length_cutoff){
 		  ++$too_short;
 		  next;
@@ -670,26 +675,26 @@ sub trim{
 	      }
 	  }
       }
-      
+
       print REPORT "\n";
       while (<ERROR>){
 	  warn $_;
 	  print REPORT $_;
       }
-      
+
       close TRIM or die "Unable to close TRIM filehandle: $!\n";
       close ERROR or die "Unable to close ERROR filehandle: $!\n";
       close OUT or die  "Unable to close OUT filehandle: $!\n";
-      
+
   }
-  
-  
+
+
   if ($rrbs){
       unless ($keep){ # keeping the quality trimmed intermediate file for RRBS files
-	  
+
 	  # deleting temporary quality trimmed file
 	  my $deleted = unlink "$output_dir$temp";
-	  
+
 	  if ($deleted){
 	      warn "Successfully deleted temporary file $temp\n\n";
 	  }
@@ -698,22 +703,22 @@ sub trim{
 	  }
       }
   }
-  
+
   ### Wait and reap the child process (Cutadapt) so that it doesn't become a zombie process
   waitpid $pid, 0;
   unless ($? == 0){
       die "\n\nCutadapt terminated with exit signal: '$?'.\nTerminating Trim Galore run, please check error message(s) to get an idea what went wrong...\n\n";
   }
-  
+
   warn "\nRUN STATISTICS FOR INPUT FILE: $filename\n";
   print REPORT "\nRUN STATISTICS FOR INPUT FILE: $filename\n";
-  
+
   warn "="x 45,"\n";
   print REPORT "="x 45,"\n";
-  
+
   warn "$count sequences processed in total\n";
   print REPORT "$count sequences processed in total\n";
-  
+
   ###  only reporting this separately if quality and adapter trimming were performed separately
   if ($rrbs){
       my $percentage_shortened;
@@ -727,7 +732,7 @@ sub trim{
 	  print REPORT "Unable to determine percentage of reads that were shortened because 0 lines were processed\n\n";
       }
   }
-  
+
   my $percentage_too_short;
   my $percentage_too_long;
   my $percentage_too_many_n;
@@ -741,9 +746,9 @@ sub trim{
       $percentage_too_long = 'N/A';
       $percentage_too_many_n = 'N/A';
   }
-  
-  
-  
+
+
+
   if ($validate){ ### only for paired-end files
       warn "The length threshold of paired-end sequences gets evaluated later on (in the validation step)\n";
   }
@@ -759,22 +764,22 @@ sub trim{
 	  print REPORT "Sequences removed because after trimming they were longer than the maximum length cutoff of $max_length bp:\t$too_long ($percentage_too_long%)\n";
       }
   }
-  
+
   if ($rrbs){
       my $percentage_rrbs_trimmed = sprintf ("%.1f",$rrbs_trimmed/$count*100);
       warn "RRBS reads trimmed by additional 2 bp when adapter contamination was detected:\t$rrbs_trimmed ($percentage_rrbs_trimmed%)\n";
       print REPORT "RRBS reads trimmed by additional 2 bp when adapter contamination was detected:\t$rrbs_trimmed ($percentage_rrbs_trimmed%)\n";
   }
-  
+
   if ($non_directional){
       my $percentage_rrbs_trimmed_at_start = sprintf ("%.1f",$rrbs_trimmed_start/$count*100);
       warn "RRBS reads trimmed by 2 bp at the start when read started with CAA ($CAA) or CGA ($CGA) in total:\t$rrbs_trimmed_start ($percentage_rrbs_trimmed_at_start%)\n";
       print REPORT "RRBS reads trimmed by 2 bp at the start when read started with CAA ($CAA) or CGA ($CGA) in total:\t$rrbs_trimmed_start ($percentage_rrbs_trimmed_at_start%)\n";
   }
-  
+
   warn "\n";
   print REPORT "\n";
-  
+
   ### RUNNING FASTQC unless we are dealing with paired-end files
   unless($validate){
       if ($fastqc){
@@ -788,11 +793,11 @@ sub trim{
 	  }
       }
   }
-  
+
   ### VALIDATE PAIRED-END FILES
   if ($validate){
       ### Figure out whether current file counts as read 1 or read 2 of paired-end files
-      
+
       if ( scalar(@filenames)%2 == 0){ # this is read 1 of a pair
 	  $file_1 = $output_filename;
 	  shift @filenames;
@@ -803,50 +808,50 @@ sub trim{
 	  shift @filenames;
 	  # warn "This is read 2: $file_2\n\n";
       }
-      
+
       if ($file_1 and $file_2){
 	  warn "Validate paired-end files $file_1 and $file_2\n";
 	  # sleep (1);
-	  
+
 	  my ($val_1,$val_2,$un_1,$un_2) = validate_paired_end_files($file_1,$file_2);
-	  
+
 	  ### RUNNING FASTQC
 	  if ($fastqc){
-	      
+
 	    warn "\n  >>> Now running FastQC on the validated data $val_1<<<\n\n";
 	    #sleep (3);
-	    
+
 	    if ($fastqc_args){
 		system ("$path_to_fastqc $fastqc_args $output_dir$val_1");
 	    }
 	    else{
 		system ("$path_to_fastqc $output_dir$val_1");
 	    }
-	    
+
 	    warn "\n  >>> Now running FastQC on the validated data $val_2<<<\n\n";
 	    #sleep (3);
-	    
+
 	    if ($fastqc_args){
 		system ("$path_to_fastqc $fastqc_args $output_dir$val_2");
 	    }
 	    else{
 		system ("$path_to_fastqc $output_dir$val_2");
 	    }
-	    
+
 	  }
-	  
+
 	  warn "Deleting both intermediate output files $file_1 and $file_2\n";
 	  unlink "$output_dir$file_1";
 	  unlink "$output_dir$file_2";
-	  
+
 	  warn "\n",'='x100,"\n\n";
 	  # sleep (1);
-	  
+
 	  $file_1 = undef; # setting file_1 and file_2 to undef once validation is completed
 	  $file_2 = undef;
       }
   }
-  close REPORT or warn "Failed to close filehandle REPORT: $!\n"; 
+  close REPORT or warn "Failed to close filehandle REPORT: $!\n";
 }
 
 sub validate_paired_end_files{
@@ -862,34 +867,34 @@ sub validate_paired_end_files{
   else{
       open (IN1, "$output_dir$file_1") or die "Couldn't read from file $file_1: $!\n";
   }
-  
+
   if ($file_2 =~ /\.gz$/){
       open (IN2,"gunzip -c $output_dir$file_2 |") or die "Couldn't read from file $file_2: $!\n";
   }
   else{
       open (IN2, "$output_dir$file_2") or die "Couldn't read from file $file_2: $!\n";
   }
-  
+
   warn "\n>>>>> Now validing the length of the 2 paired-end infiles: $file_1 and $file_2 <<<<<\n";
   # sleep (1);
-  
+
   my $out_1 = $file_1;
   my $out_2 = $file_2;
-  
+
   if ($out_1 =~ /gz$/){
       $out_1 =~ s/trimmed\.fq\.gz$/val_1.fq/;
   }
   else{
       $out_1 =~ s/trimmed\.fq$/val_1.fq/;
   }
-  
+
   if ($out_2 =~ /gz$/){
       $out_2 =~ s/trimmed\.fq\.gz$/val_2.fq/;
   }
   else{
       $out_2 =~ s/trimmed\.fq$/val_2.fq/;
   }
-  
+
   if ($gzip){
       if ($dont_gzip){
 	  open (R1,'>',$output_dir.$out_1) or die "Couldn't write to $out_1 $!\n";
@@ -902,7 +907,7 @@ sub validate_paired_end_files{
   else{
       open (R1,'>',$output_dir.$out_1) or die "Couldn't write to $out_1 $!\n";
   }
-  
+
   if ($gzip){
       if ($dont_gzip){
 	  open (R2,'>',$output_dir.$out_2) or die "Couldn't write to $out_2 $!\n";
@@ -915,7 +920,7 @@ sub validate_paired_end_files{
   else{
       open (R2,'>',$output_dir.$out_2) or die "Couldn't write to $out_2 $!\n";
   }
-  
+
   warn "Writing validated paired-end read 1 reads to $out_1\n";
   warn "Writing validated paired-end read 2 reads to $out_2\n\n";
 
@@ -923,17 +928,17 @@ sub validate_paired_end_files{
   my $unpaired_2;
 
   if ($retain){
-      
+
       $unpaired_1 = $file_1;
       $unpaired_2 = $file_2;
-      
+
       if ($unpaired_1 =~ /gz$/){
 	  $unpaired_1 =~ s/trimmed\.fq\.gz$/unpaired_1.fq/;
       }
       else{
 	  $unpaired_1 =~ s/trimmed\.fq$/unpaired_1.fq/;
       }
-      
+
       if ($unpaired_2 =~ /gz$/){
 	  $unpaired_2 =~ s/trimmed\.fq\.gz$/unpaired_2.fq/;
       }
@@ -953,7 +958,7 @@ sub validate_paired_end_files{
       else{
 	  open (UNPAIRED1,'>',$output_dir.$unpaired_1) or die "Couldn't write to $unpaired_1: $!\n";
       }
-      
+
       if ($gzip){
 	  if ($dont_gzip){
 	      open (UNPAIRED2,'>',$output_dir.$unpaired_2) or die "Couldn't write to $unpaired_2: $!\n";
@@ -970,20 +975,20 @@ sub validate_paired_end_files{
       warn "Writing unpaired read 1 reads to $unpaired_1\n";
       warn "Writing unpaired read 2 reads to $unpaired_2\n\n";
   }
-  
+
   my $sequence_pairs_removed = 0;
   my $too_many_N_pairs = 0;
   my $read_1_printed = 0;
   my $read_2_printed = 0;
-  
+
   my $count = 0;
-  
+
   while (1){
       my $id_1   = <IN1>;
       my $seq_1  = <IN1>;
       my $l3_1   = <IN1>;
       my $qual_1 = <IN1>;
-      
+
       my $id_2   = <IN2>;
       my $seq_2  = <IN2>;
       my $l3_2   = <IN2>;
@@ -997,7 +1002,7 @@ sub validate_paired_end_files{
       }
       elsif( !($id_2 and $seq_2 and $l3_2 and $qual_2) and ($id_1 and $seq_1 and $l3_1 and $qual_1)){
 	  die "Read 2 output is truncated at sequence count: $count, please check your paired-end input files! Terminating...\n\n";
-      }      
+      }
       else{
 	  last unless ($id_1 and $seq_1 and $l3_1 and $qual_1);
 	  last unless ($id_2 and $seq_2 and $l3_2 and $qual_2);
@@ -1013,12 +1018,12 @@ sub validate_paired_end_files{
 	      die "Input file doesn't seem to be in FastQ format at sequence $count\n";
 	  }
       }
-      
+
       chomp $seq_1;
       chomp $seq_2;
       chomp $qual_1;
       chomp $qual_2;
-      
+
       if ($clip_r1){
 	  if (length $seq_1 > $clip_r1){ # sequences that are already too short won't be trimmed again
 	      $seq_1 = substr($seq_1,$clip_r1); # starting after the sequences to be trimmed until the end of the sequence
@@ -1031,7 +1036,7 @@ sub validate_paired_end_files{
 	      $qual_2 = substr($qual_2,$clip_r2);
 	  }
       }
-      
+
       if ($three_prime_clip_r1){
 	  if (length $seq_1 > $three_prime_clip_r1){  # sequences that are already too short won't be clipped again
 	      $seq_1 = substr($seq_1,0,(length($seq_1) - $three_prime_clip_r1)); # starting after the sequences to be trimmed until the end of the sequence
@@ -1043,10 +1048,10 @@ sub validate_paired_end_files{
 	      $seq_2 = substr($seq_2,0,(length($seq_2) - $three_prime_clip_r2)); # starting after the sequences to be trimmed until the end of the sequence
 	      $qual_2 = substr($qual_2,0,(length($qual_2) - $three_prime_clip_r2));
 	  }
-      }	
-      
+      }
+
       if (defined $maxn){
-	  
+
 	  # Read 1
 	  my $n_count = Ncounter($seq_1);
 	  # warn "Checking Read 1 for Ns: Found $n_count\n";
@@ -1055,7 +1060,7 @@ sub validate_paired_end_files{
 	      ++$sequence_pairs_removed;
 	      next; # bailing straight away
 	  }
-	  
+
 	  # Read 2
 	  $n_count = Ncounter($seq_2);
 	  # warn "Checking Read 2 for Ns: Found $n_count\n";
@@ -1065,12 +1070,12 @@ sub validate_paired_end_files{
 	      next;
 	  }
       }
-      
+
       ### making sure that the reads do have a sensible length
       if ( (length($seq_1) < $length_cutoff) or (length($seq_2) < $length_cutoff) ){
 	  ++$sequence_pairs_removed;
 	  if ($retain){ # writing out single-end reads if they are longer than the cutoff
-	      
+
 	      if ( length($seq_1) >= $length_read_1){ # read 1 is long enough
 		  print UNPAIRED1 $id_1;
 		  print UNPAIRED1 "$seq_1\n";
@@ -1078,7 +1083,7 @@ sub validate_paired_end_files{
 		  print UNPAIRED1 "$qual_1\n";
 		  ++$read_1_printed;
 	      }
-	      
+
 	      if ( length($seq_2) >= $length_read_2){ # read 2 is long enough
 		  print UNPAIRED2 $id_2;
 		  print UNPAIRED2 "$seq_2\n";
@@ -1086,7 +1091,7 @@ sub validate_paired_end_files{
 		  print UNPAIRED2 "$qual_2\n";
 		  ++$read_2_printed;
 	      }
-	      
+
 	  }
       }
       else{
@@ -1094,19 +1099,19 @@ sub validate_paired_end_files{
 	  print R1 "$seq_1\n";
 	  print R1 $l3_1;
 	  print R1 "$qual_1\n";
-	  
+
 	  print R2 $id_2;
 	  print R2 "$seq_2\n";
 	  print R2 $l3_2;
 	  print R2 "$qual_2\n";
       }
-      
+
   }
-  
-  
+
+
   my $percentage;
   my $percentage_Ns;
-  
+
   if ($count){
     $percentage = sprintf("%.2f",$sequence_pairs_removed/$count*100);
     $percentage_Ns = sprintf("%.2f",$too_many_N_pairs/$count*100);
@@ -1115,30 +1120,30 @@ sub validate_paired_end_files{
       $percentage = 'N/A';
       $percentage_Ns = 'N/A';
   }
-  
+
   warn "Total number of sequences analysed: $count\n\n";
   warn "Number of sequence pairs removed because at least one read was shorter than the length cutoff ($length_cutoff bp): $sequence_pairs_removed ($percentage%)\n";
   if (defined $maxn){
       warn "Number of sequence pairs removed because at least one read contained more N(s) than the specified limit of $maxn: $too_many_N_pairs ($percentage_Ns%)\n";
       print REPORT "Number of sequence pairs removed because at least one read contained more N(s) than the specified limit of $maxn: $too_many_N_pairs ($percentage_Ns%)\n";
   }
-  
+
   print REPORT "Total number of sequences analysed for the sequence pair length validation: $count\n\n";
   print REPORT "Number of sequence pairs removed because at least one read was shorter than the length cutoff ($length_cutoff bp): $sequence_pairs_removed ($percentage%)\n";
-  
+
   if ($keep){
       warn "Number of unpaired read 1 reads printed: $read_1_printed\n";
       warn "Number of unpaired read 2 reads printed: $read_2_printed\n";
   }
-  
+
   close R1 or die $!;
   close R2 or die $!;
-  
+
   if ($retain){
       close UNPAIRED1 or die $!;
       close UNPAIRED2 or die $!;
   }
-  
+
   warn "\n";
   if ($retain){
       return ($out_1,$out_2,$unpaired_1,$unpaired_2);
@@ -1168,16 +1173,16 @@ sub file_sanity_check{
   unless ($id and $seq and $three and $qual){
       die "Input file '$file' seems to be completely empty. Consider respecifying!\n\n";
   }
-  
+
   chomp $seq;
-  
+
   # testing if the file is a colorspace file in which case we bail
   if ($seq =~ /\d+/){
       die "File seems to be in SOLiD colorspace format which is not supported by Trim Galore (sequence is: '$seq')! Please use Cutadapt on colorspace files separately and check its documentation!\n\n";
   }
-  
+
   close SANITY;
-  
+
 }
 
 
@@ -1325,7 +1330,7 @@ sub process_commandline{
 				 'version' => \$version,
 				 'stringency=i' => \$stringency,
 				 'fastqc' => \$fastqc,
-				 'RRBS' => \$rrbs,	
+				 'RRBS' => \$rrbs,
 				 'keep' => \$keep,
 				 'length=i' => \$length_cutoff,
 				 'non_directional' => \$non_directional,
@@ -1355,7 +1360,7 @@ sub process_commandline{
 				 'max_n=i'      => \$maxn,
 				 'trim-n'      => \$trimn,
       );
-  
+
   ### EXIT ON ERROR if there were errors with any of the supplied options
   unless ($command_line){
     die "Please respecify command line options\n";
@@ -1446,7 +1451,7 @@ VERSION
       if ($adapter =~ /^([ACTGN]){(\d+)}$/){
 	  # warn "Base: $1\n# repeats: $2\n";
 	  my $tmp_adapter = uc$1x$2;
-	  
+
 	  warn "Adapter sequence given as >$adapter< expanded to: >$tmp_adapter<\n";
 	  $adapter = $tmp_adapter;
       }
@@ -1456,7 +1461,7 @@ VERSION
 	  }
       }
       $adapter = uc$adapter;
-      
+
       if ($illumina){
 	  die "You can't supply an adapter sequence AND use the Illumina universal adapter sequence. Make your choice.\n\n";
       }
@@ -1472,13 +1477,13 @@ VERSION
       unless ($validate){
 	  die "An optional adapter for read 2 of paired-end files requires '--paired' to be specified as well! Please re-specify\n";
       }
-      
+
       # The adapter may be given as a single base that occurs a number of times
       # in the form BASE{number of times}, e.g. "-a2 A{10}"
       if ($adapter2 =~ /^([ACTGN]){(\d+)}$/){
 	  # warn "Base: $1\n# repeats: $2\n";
 	  my $tmp_adapter2 = uc$1x$2;
-	  
+
 	  warn "Adapter2 sequence given as >$adapter2< expanded to: >$tmp_adapter2<\n";
 	  $adapter2 = $tmp_adapter2;
       }
@@ -1489,7 +1494,7 @@ VERSION
       }
       $adapter2 = uc$adapter2;
   }
-  
+
   ### LENGTH CUTOFF
   # this gets set right at the start after the adapter auto-detection has been concluded
 
@@ -1558,47 +1563,47 @@ VERSION
   else{
       $output_dir = '';
   }
-  
+
   ### Trimming at the 5' end
   if (defined $clip_r2){ # trimming 5' bases of read 2
       die "Clipping the 5' end of read 2 is only allowed for paired-end files (--paired)\n" unless ($validate);
   }
-  
+
   if (defined $clip_r1){ # trimming 5' bases of read 1
       unless ($clip_r1 > 0 and $clip_r1 < 100){
 	  die "The 5' clipping value for read 1 should have a sensible value (> 0 and < read length)\n\n";
       }
   }
-  
+
   if (defined $clip_r2){ # trimming 5' bases of read 2
       unless ($clip_r2 > 0 and $clip_r2 < 100){
 	  die "The 5' clipping value for read 2 should have a sensible value (> 0 and < read length)\n\n";
       }
   }
-  
+
   ### Trimming at the 3' end
   if (defined $three_prime_clip_r1){ # trimming 3' bases of read 1
       unless ($three_prime_clip_r1 > 0 and $three_prime_clip_r1 < 100){
 	  die "The 3' clipping value for read 1 should have a sensible value (> 0 and < read length)\n\n";
       }
   }
-  
+
   if (defined $three_prime_clip_r2){ # trimming 3' bases of read 2
       unless ($three_prime_clip_r2 > 0 and $three_prime_clip_r2 < 100){
 	  die "The 3' clipping value for read 2 should have a sensible value (> 0 and < read length)\n\n";
       }
   }
-  
+
 
   if (defined $maxn){
       unless ($maxn >= 0 and $maxn <= 100){
 	  die "--max_n needs to be an integer between 0 and 100\nPlease respecify...\n\n";
       }
   }
-  
+
   my $trim_n;
   if ($trimn){
-      $trim_n = '--trim-n';   
+      $trim_n = '--trim-n';
   }
   else{
       $trim_n = '';
@@ -1618,7 +1623,7 @@ VERSION
   else{
       $rrbs = 0;
   }
-  
+
   return ($quality,$adapter,$stringency,$rrbs,$length_cutoff,$keep,$fastqc,$non_directional,$phred_encoding,$fastqc_args,$trim,$gzip,$validate,$retain,$length_read_1,$length_read_2,$adapter2,$error_rate,$output_dir,$no_report_file,$dont_gzip,$clip_r1,$clip_r2,$three_prime_clip_r1,$three_prime_clip_r2,$nextera,$small_rna,$path_to_cutadapt,$illumina,$max_length,$maxn,$trim_n);
 }
 
@@ -1718,6 +1723,8 @@ trim_galore [options] <filename(s)>
                         If only one read became too short there is the possibility of keeping such
                         unpaired single-end reads (see --retain_unpaired). Default pair-cutoff: 20 bp.
 
+--threads <INT>         The number of threads used to run cutadapt. Default: OFF.
+
 --max_n COUNT           The total number of Ns (as integer) a read may contain before it will be removed altogether.
                         In a paired-end setting, either read exceeding this limit will result in the entire
                         pair being removed from the trimmed output files.
@@ -1763,9 +1770,9 @@ RRBS-specific options (MspI digested material):
                         site: CCGG). Single-end or Read 1 sequences (paired-end) which were adapter-trimmed
                         will have a further 2 bp removed from their 3' end. Sequences which were merely
                         trimmed because of poor quality will not be shortened further. Read 2 of paired-end
-                        libraries will in addition have the first 2 bp removed from the 5' end (by setting 
+                        libraries will in addition have the first 2 bp removed from the 5' end (by setting
                         '--clip_r2 2'). This is to avoid using artificial methylation calls from the filled-in
-                        cytosine positions close to the 3' MspI site in sequenced fragments. 
+                        cytosine positions close to the 3' MspI site in sequenced fragments.
                         This option is not recommended for users of the NuGEN ovation RRBS System 1-16
                         kit (see below).
 
@@ -1786,7 +1793,7 @@ RRBS-specific options (MspI digested material):
 Note for RRBS using the NuGEN Ovation RRBS System 1-16 kit:
 
 Owing to the fact that the NuGEN Ovation kit attaches a varying number of nucleotides (0-3) after each MspI
-site Trim Galore should be run WITHOUT the option --rrbs. This trimming is accomplished in a subsequent 
+site Trim Galore should be run WITHOUT the option --rrbs. This trimming is accomplished in a subsequent
 diversity trimming step afterwards (see their manual).
 
 
@@ -1839,7 +1846,7 @@ Paired-end specific options:
                         Default: 35 bp.
 
 
-Last modified on 22 May 2018.
+Last modified on 5 June 2018.
 
 HELP
   exit;
